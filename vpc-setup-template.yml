@@ -1,0 +1,389 @@
+# This creates a VPC with two public subnets and two private subnets in two Availability Zones,
+# together with a NAT Gateway and associated routing. Change the Availability Zone locations as needed.
+
+# Important: this configures various AWS services and there are costs associated with these services after the Free Tier usage.
+# Please see the AWS Pricing pages for details. You are responsible for any AWS costs incurred.
+# No warranty is implied in this example.
+
+# Usage from command line:
+#   aws cloudformation --region <<YOUR-REGION>> create-stack --stack-name vpc- --template-body file://vpc-setup.yaml
+Parameters:
+  AZ:
+    Type: List<AWS::EC2::AvailabilityZone::Name>
+    Description: "Select the two AZ for your subnets"
+  EnvironmentName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+
+Resources:
+  ## VPC
+  ProdVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/21
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-vpc
+
+  ## SUBNETS
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProdVPC
+      AvailabilityZone: !Select [0, !Ref AZ]
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-subnet-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProdVPC
+      AvailabilityZone: !Select [1, !Ref AZ]
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-subnet-2
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProdVPC
+      AvailabilityZone: !Select [0, !Ref AZ]
+      CidrBlock: 10.0.3.0/24
+      MapPublicIpOnLaunch: false
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProdVPC
+      AvailabilityZone: !Select [1, !Ref AZ]
+      CidrBlock: 10.0.4.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-subnet-1
+
+  PrivateDBSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProdVPC
+      AvailabilityZone: !Select [0, !Ref AZ]
+      CidrBlock: 10.0.5.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-DB-subnet-1
+
+  PrivateDBSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProdVPC
+      AvailabilityZone: !Select [1, !Ref AZ]
+      CidrBlock: 10.0.6.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-DB-subnet-2
+
+  ## INTERNET GATEWAY
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-igw
+
+  GatewayToInternet:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref ProdVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  ## PUBLIC ROUTING
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProdVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-rt
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayToInternet
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  ## NAT GATEWAY
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    DependsOn: NatPublicIP
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      AllocationId: !GetAtt NatPublicIP.AllocationId
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-natgw
+
+  ## ELASTIC IP
+  NatPublicIP:
+    Type: AWS::EC2::EIP
+    DependsOn: ProdVPC
+    Properties:
+      Domain: vpc
+
+  ## PRIVATE ROUTING
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProdVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-rt
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      NatGatewayId: !Ref NatGateway
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateDBSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateDBSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateDBSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateDBSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  #Setting up NACL and rules
+  PublicNacl:
+    Type: "AWS::EC2::NetworkAcl"
+    Properties:
+      VpcId: !Ref ProdVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-nacl
+
+  PublicNaclInboundRule1:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      Egress: false
+      NetworkAclId:
+        Ref: "PublicNacl"
+      CidrBlock: "0.0.0.0/0"
+      Protocol: -1
+      RuleNumber: "100"
+      RuleAction: "allow"
+
+  PublicNaclOutboundRule1:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      Egress: true
+      NetworkAclId:
+        Ref: "PublicNacl"
+      CidrBlock: "0.0.0.0/0"
+      Protocol: "-1"
+      RuleNumber: "100"
+      RuleAction: "allow"
+
+  PrivateNacl:
+    Type: "AWS::EC2::NetworkAcl"
+    Properties:
+      VpcId: !Ref ProdVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-nacl
+
+  PrivateNaclInboundRule1:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      Egress: false
+      NetworkAclId:
+        Ref: "PrivateNacl"
+      CidrBlock: "10.0.1.0/24"
+      Protocol: -1
+      RuleNumber: "200"
+      RuleAction: "allow"
+
+  PrivateNaclInboundRule2:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      Egress: false
+      NetworkAclId:
+        Ref: "PrivateNacl"
+      CidrBlock: "10.0.2.0/24"
+      Protocol: -1
+      RuleNumber: "210"
+      RuleAction: "allow"
+
+  PrivateNaclOutboundRule1:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      Egress: true
+      NetworkAclId:
+        Ref: "PrivateNacl"
+      CidrBlock: "10.0.1.0/24"
+      Protocol: "-1"
+      RuleNumber: "200"
+      RuleAction: "allow"
+
+  PrivateNaclOutboundRule2:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      Egress: true
+      NetworkAclId:
+        Ref: "PrivateNacl"
+      CidrBlock: "10.0.2.0/24"
+      Protocol: "-1"
+      RuleNumber: "210"
+      RuleAction: "allow"
+
+  PrivateDBNacl:
+    Type: "AWS::EC2::NetworkAcl"
+    Properties:
+      VpcId: !Ref ProdVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-db-nacl
+
+  PrivateDBNaclInboundRule1:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      Egress: false
+      NetworkAclId:
+        Ref: "PrivateDBNacl"
+      CidrBlock: "10.0.5.0/24"
+      Protocol: 6
+      PortRange:
+        From: 5432
+        To: 5432
+      RuleNumber: 210
+      RuleAction: "allow"
+
+  PrivateDBNaclInboundRule2:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      Egress: false
+      NetworkAclId:
+        Ref: "PrivateDBNacl"
+      CidrBlock: "10.0.6.0/24"
+      Protocol: 6
+      PortRange:
+        From: 5432
+        To: 5432
+      RuleNumber: 220
+      RuleAction: "allow"
+
+  PrivateDBNaclOutboundRule1:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      Egress: true
+      NetworkAclId:
+        Ref: "PrivateDBNacl"
+      CidrBlock: "10.0.5.0/24"
+      Protocol: 6
+      PortRange:
+        From: 5432
+        To: 5432
+      RuleNumber: 210
+      RuleAction: "allow"
+
+  PrivateDBNaclOutboundRule2:
+    Type: "AWS::EC2::NetworkAclEntry"
+    Properties:
+      Egress: true
+      NetworkAclId:
+        Ref: "PrivateDBNacl"
+      CidrBlock: "10.0.6.0/24"
+      Protocol: 6
+      PortRange:
+        From: 5432
+        To: 5432
+      RuleNumber: 220
+      RuleAction: "allow"
+
+  #Associate subnets to respective NACLs
+  PublicNaclAssociation1:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId:
+        Ref: "PublicSubnet1"
+      NetworkAclId:
+        Ref: "PublicNacl"
+
+  PublicNaclAssociation2:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId:
+        Ref: "PublicSubnet2"
+      NetworkAclId:
+        Ref: "PublicNacl"
+
+  PrivateNaclAssociation1:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId:
+        Ref: "PrivateSubnet1"
+      NetworkAclId:
+        Ref: "PrivateNacl"
+
+  PrivateNaclAssociation2:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId:
+        Ref: "PrivateSubnet2"
+      NetworkAclId:
+        Ref: "PrivateNacl"
+
+  DBNaclAssociation1:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId:
+        Ref: "PrivateDBSubnet1"
+      NetworkAclId:
+        Ref: "PrivateDBNacl"
+
+  DBNaclAssociation2:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId:
+        Ref: "PrivateDBSubnet2"
+      NetworkAclId:
+        Ref: "PrivateDBNacl"
